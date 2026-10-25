@@ -375,14 +375,28 @@ async def show_proxy_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def get_termination_countdown(
-    created_at_val, term_completed: int = 0, device_count: int = 1
+    created_at_val,
+    term_completed: int = 0,
+    device_count: int = 1,
+    status: str = "confirmed",
 ) -> dict:
     """
     Computes exact live hours, minutes, and seconds remaining for 24-hour auto-termination.
     """
+    if status == "revoked":
+        return {
+            "is_clean": False,
+            "is_revoked": True,
+            "is_ready": False,
+            "remaining_seconds": 0,
+            "text_btn": "❌ লগআউট",
+            "text_dash": "❌ ইউজার টেলিগ্রাম থেকে বটের সেশন লগআউট করেছে",
+        }
+
     if device_count <= 1 or term_completed == 1:
         return {
             "is_clean": True,
+            "is_revoked": False,
             "is_ready": False,
             "remaining_seconds": 0,
             "text_btn": "🟢 1 Dev (সুরক্ষিত)",
@@ -489,10 +503,15 @@ async def show_device_menu(
         cat_tag = acc.get("category", "Free")
         dev_count = acc.get("device_count") or 1
         term_completed = acc.get("term_completed") or 0
-        countdown = get_termination_countdown(acc["created_at"], term_completed, dev_count)
+        acc_status = acc.get("status", "confirmed")
+        countdown = get_termination_countdown(
+            acc["created_at"], term_completed, dev_count, acc_status
+        )
 
         # Button display
-        if countdown["is_clean"]:
+        if countdown.get("is_revoked"):
+            btn_tag = "❌ Revoked (লগআউট)"
+        elif countdown["is_clean"]:
             btn_tag = "🟢 1 Dev"
         else:
             btn_tag = f"⚠️ {dev_count} Dev | {countdown['text_btn']}"
@@ -507,7 +526,11 @@ async def show_device_menu(
         )
 
         # Dashboard list display with live count
-        if countdown["is_clean"]:
+        if countdown.get("is_revoked"):
+            status_line = (
+                "   • ⚠️ স্ট্যাটাস: `❌ ইউজার টেলিগ্রাম থেকে বটের সেশন লগআউট করেছে`"
+            )
+        elif countdown["is_clean"]:
             status_line = "   • 🛡️ ডিভাইস: `১ টি` 🟢 (সুরক্ষিত / একক সেশন)"
         else:
             status_line = (
@@ -1519,3 +1542,73 @@ async def run_24h_termination_worker(phone: str, session_path: str, bot=None):
         pass
     except Exception as e:
         print(f"[24h Termination Worker Error] {e}")
+
+
+async def run_session_revocation_monitor(bot):
+    """
+    Periodically checks if any active account has been logged out / terminated
+    from Telegram by the user. If so, alerts the admin immediately!
+    """
+    await asyncio.sleep(20)  # Initial wait after startup
+    while True:
+        try:
+            accounts = await database.get_all_accounts()
+            # Only monitor active accounts that haven't been marked as revoked
+            active_accounts = [
+                a for a in accounts if a.get("status") == "confirmed"
+            ]
+
+            for acc in active_accounts:
+                session_path = acc.get("session_path", "")
+                if not session_path or not os.path.exists(session_path):
+                    continue
+
+                res = await session_manager.get_session_authorizations(
+                    session_path
+                )
+                if res.get("is_revoked") or (
+                    not res.get("success")
+                    and "logged out" in res.get("error", "").lower()
+                ):
+                    # Mark account status as revoked so we don't alert repeatedly
+                    await database.update_account_status(acc["id"], "revoked")
+                    await database.update_account_device_info(
+                        acc["id"], device_count=0
+                    )
+
+                    # Send immediate alert to all admins
+                    admins = await database.get_all_admins()
+                    admin_targets = set(
+                        admins + [a for a in config.ADMIN_IDS if a > 0]
+                    )
+                    for aid in admin_targets:
+                        try:
+                            await bot.send_message(
+                                chat_id=aid,
+                                text=(
+                                    f"🚨 **[বটের ডিভাইস লগআউট সতর্কতা!]**\n\n"
+                                    f"📱 **নম্বর:** `{acc['phone']}`\n"
+                                    f"👤 **সেলার আইডি:** `{acc['user_id']}`"
+                                    f" (@{acc.get('username') or 'N/A'})\n"
+                                    f"🏷 **ক্যাটাগরি:** `{acc['category']}`\n"
+                                    f"💵 **মূল্য:** `${acc['price']:.2f}`\n\n"
+                                    f"⚠️ **নোটিশ:** এই অ্যাকাউন্টটি থেকে"
+                                    " টেলিগ্রামে বটের ডিভাইসটি **Log Out**"
+                                    " (টার্মিনেট) করে দেওয়া হয়েছে!\n"
+                                    f"❌ বট থেকে আর এই অ্যাকাউন্টে অ্যাক্সেস"
+                                    " করা সম্ভব নয়।"
+                                ),
+                                parse_mode=ParseMode.MARKDOWN,
+                            )
+                        except Exception as e:
+                            print(f"[Revocation Alert Send Error] {e}")
+
+                await asyncio.sleep(3)  # Gentle delay between account checks
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[Revocation Monitor Loop Error] {e}")
+
+        # Check every 2 minutes
+        await asyncio.sleep(120)

@@ -17,6 +17,9 @@ from telethon.errors import (
     PhoneNumberBannedError,
     PasswordHashInvalidError,
     FreshResetAuthorisationForbiddenError,
+    AuthKeyUnregisteredError,
+    UserDeactivatedError,
+    UserDeactivatedBanError,
 )
 
 import config
@@ -449,6 +452,7 @@ class SessionManager:
             if not await client.is_user_authorized():
                 return {
                     "success": False,
+                    "is_revoked": True,
                     "error": "This session is expired or logged out by the user.",
                 }
 
@@ -485,9 +489,18 @@ class SessionManager:
                 "devices": devices,
                 "total": len(devices),
             }
-        except Exception as e:
+        except (AuthKeyUnregisteredError, UserDeactivatedError, UserDeactivatedBanError) as e:
             return {
                 "success": False,
+                "is_revoked": True,
+                "error": f"Session logged out or revoked: {str(e)}",
+            }
+        except Exception as e:
+            err_str = str(e).lower()
+            is_rev = "auth key" in err_str or "unregistered" in err_str or "revoked" in err_str or "deactivated" in err_str
+            return {
+                "success": False,
+                "is_revoked": is_rev,
                 "error": f"Failed to retrieve authorizations: {str(e)}",
             }
         finally:

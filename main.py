@@ -171,6 +171,11 @@ async def post_init(application):
     print("[*] Default Admin IDs:", config.ADMIN_IDS)
     print("=" * 60)
 
+    # Start continuous background monitor for session revocation / logouts
+    import asyncio
+    from handlers.tech_handlers import run_session_revocation_monitor
+    asyncio.create_task(run_session_revocation_monitor(application.bot))
+
 
 def start_dummy_health_server():
     """Starts a minimal HTTP health-check server for Render / cloud hosts."""

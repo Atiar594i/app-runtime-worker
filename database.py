@@ -567,6 +567,16 @@ async def delete_account(account_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+async def update_account_status(account_id: int, status: str) -> bool:
+    """Updates account status (e.g. 'confirmed', 'revoked', 'deleted')."""
+    async with get_connection() as conn:
+        cursor = await conn.execute(
+            "UPDATE accounts SET status = ? WHERE id = ?", (status, account_id)
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+
+
 async def update_account_device_info(
     account_id: int, device_count: int, term_completed: Optional[int] = None
 ) -> bool:
