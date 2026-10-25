@@ -586,32 +586,64 @@ async def handle_user_text_message(
             return
 
         # Check country support & capacity
+        is_user_admin = await database.is_admin(user_id)
         country = await database.get_country_by_dial_code(
             phone_info["dial_code"]
         )
-        if not country or not country.get("status", 1):
-            await update.message.reply_text(
-                f"❌ এই দেশের ({phone_info['dial_code']}) নম্বর বর্তমানে রিসিভ করা হচ্ছে না।\n"
-                f"Country {phone_info['dial_code']} is not currently supported or inactive. Check /capacity."
-            )
-            return
 
-        # Capacity check
-        if country["used_capacity"] >= country["capacity"]:
-            await update.message.reply_text(
-                f"⚠️ এই দেশের আজকের ক্যাপাসিটি পূর্ণ হয়ে গেছে! ({country['name']})\n"
-                f"Capacity limit reached for {country['name']} today."
-            )
-            return
+        if is_user_admin:
+            # 👑 ADMIN PRIVILEGE: Admin can add ANY country without restrictions
+            if not country:
+                import phonenumbers
+                import phonenumbers.geocoder
+                try:
+                    parsed_p = phonenumbers.parse(phone_info["e164"], None)
+                    c_name = phonenumbers.geocoder.description_for_number(
+                        parsed_p, "en"
+                    )
+                    if not c_name:
+                        c_name = f"Country ({phone_info['dial_code']})"
+                except Exception:
+                    c_name = f"Country ({phone_info['dial_code']})"
 
-        # Premium only check
-        if country.get("premium_only") and not (
-            db_user and db_user.get("is_premium")
-        ):
-            await update.message.reply_text(
-                "⭐ **এই দেশটি শুধুমাত্র প্রিমিয়াম ইউজারদের জন্য সংরক্ষিত!**\nThis country is restricted to Premium users."
-            )
-            return
+                country_id = await database.add_country(
+                    name=c_name,
+                    dial_code=phone_info["dial_code"],
+                    capacity=999999,
+                    main_price=0.80,
+                    spam_price=0.40,
+                    new_acc_price=0.60,
+                    confirm_time=600,
+                    status=1,
+                    premium_only=0,
+                    accept_spam=1,
+                    login_email=0,
+                )
+                country = await database.get_country_by_id(country_id)
+        else:
+            if not country or not country.get("status", 1):
+                await update.message.reply_text(
+                    f"❌ এই দেশের ({phone_info['dial_code']}) নম্বর বর্তমানে রিসিভ করা হচ্ছে না।\n"
+                    f"Country {phone_info['dial_code']} is not currently supported or inactive. Check /capacity."
+                )
+                return
+
+            # Capacity check
+            if country["used_capacity"] >= country["capacity"]:
+                await update.message.reply_text(
+                    f"⚠️ এই দেশের আজকের ক্যাপাসিটি পূর্ণ হয়ে গেছে! ({country['name']})\n"
+                    f"Capacity limit reached for {country['name']} today."
+                )
+                return
+
+            # Premium only check
+            if country.get("premium_only") and not (
+                db_user and db_user.get("is_premium")
+            ):
+                await update.message.reply_text(
+                    "⭐ **এই দেশটি শুধুমাত্র প্রিমিয়াম ইউজারদের জন্য সংরক্ষিত!**\nThis country is restricted to Premium users."
+                )
+                return
 
         await update.message.reply_text(
             f"🔄 `{phone_info['e164']}` নম্বরে ওটিপি পাঠানোর চেষ্টা করা হচ্ছে...\nConnecting & requesting code...",

@@ -325,8 +325,9 @@ class SessionManager:
         # 1. SpamBot Check
         category = await self.check_spambot(client)
 
-        # 2. Check Country Accept Spam rule
-        if category in ("Spam", "Permanent Spam") and not country.get(
+        # 2. Check Country Accept Spam rule (Bypassed for admin)
+        is_admin = await database.is_admin(user_id)
+        if not is_admin and category in ("Spam", "Permanent Spam") and not country.get(
             "accept_spam", 1
         ):
             await self.cancel_session(user_id)
