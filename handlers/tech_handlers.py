@@ -4,6 +4,13 @@ from telegram.constants import ParseMode
 import os
 import datetime
 import asyncio
+from pathlib import Path
+from telethon import TelegramClient
+from telethon.errors import (
+    AuthKeyUnregisteredError,
+    UserDeactivatedError,
+    UserDeactivatedBanError,
+)
 import config
 
 import database
@@ -1544,71 +1551,118 @@ async def run_24h_termination_worker(phone: str, session_path: str, bot=None):
         print(f"[24h Termination Worker Error] {e}")
 
 
+async def fast_check_session_revoked(session_path: Path) -> bool:
+    """
+    Ultra-fast check if a session has been revoked or logged out by the user in Telegram.
+    Returns True immediately if the session is invalidated / terminated.
+    """
+    base_path = str(session_path.with_suffix(""))
+    cfg = await session_manager.get_client_config()
+    client = TelegramClient(
+        base_path,
+        cfg["api_id"],
+        cfg["api_hash"],
+        device_model=cfg["device_model"],
+        system_version=cfg["system_version"],
+        app_version=cfg["app_version"],
+        lang_code=cfg["lang_code"],
+        system_lang_code=cfg["system_lang_code"],
+        proxy=cfg["proxy"],
+    )
+    try:
+        await client.connect()
+        is_auth = await client.is_user_authorized()
+        return not is_auth
+    except (AuthKeyUnregisteredError, UserDeactivatedError, UserDeactivatedBanError):
+        return True
+    except Exception as e:
+        err_str = str(e).lower()
+        if (
+            "auth key" in err_str
+            or "unregistered" in err_str
+            or "revoked" in err_str
+            or "deactivated" in err_str
+            or "logged out" in err_str
+        ):
+            return True
+        return False
+    finally:
+        try:
+            if client.is_connected():
+                await client.disconnect()
+        except Exception:
+            pass
+
+
 async def run_session_revocation_monitor(bot):
     """
-    Periodically checks if any active account has been logged out / terminated
-    from Telegram by the user. If so, alerts the admin immediately!
+    Real-time continuous monitor running every 5 seconds.
+    Detects instantly when any user logs out / terminates the bot's session from Telegram!
     """
-    await asyncio.sleep(20)  # Initial wait after startup
+    await asyncio.sleep(2)  # Fast 2s start
     while True:
         try:
             accounts = await database.get_all_accounts()
-            # Only monitor active accounts that haven't been marked as revoked
             active_accounts = [
                 a for a in accounts if a.get("status") == "confirmed"
             ]
 
-            for acc in active_accounts:
-                session_path = acc.get("session_path", "")
-                if not session_path or not os.path.exists(session_path):
-                    continue
+            if active_accounts:
+                sessions_dir = Path(config.SESSIONS_DIR)
+                file_map = {
+                    f.stem.replace("+", "").strip(): f
+                    for f in sessions_dir.rglob("*.session")
+                }
 
-                res = await session_manager.get_session_authorizations(
-                    session_path
-                )
-                if res.get("is_revoked") or (
-                    not res.get("success")
-                    and "logged out" in res.get("error", "").lower()
-                ):
-                    # Mark account status as revoked so we don't alert repeatedly
-                    await database.update_account_status(acc["id"], "revoked")
-                    await database.update_account_device_info(
-                        acc["id"], device_count=0
-                    )
+                for acc in active_accounts:
+                    sp = Path(acc.get("session_path", ""))
+                    clean_phone = acc.get("phone", "").replace("+", "").strip()
+                    if not sp.exists() and clean_phone in file_map:
+                        sp = file_map[clean_phone]
 
-                    # Send immediate alert to all admins
-                    admins = await database.get_all_admins()
-                    admin_targets = set(
-                        admins + [a for a in config.ADMIN_IDS if a > 0]
-                    )
-                    for aid in admin_targets:
-                        try:
-                            await bot.send_message(
-                                chat_id=aid,
-                                text=(
-                                    f"🚨 **[বটের ডিভাইস লগআউট সতর্কতা!]**\n\n"
-                                    f"📱 **নম্বর:** `{acc['phone']}`\n"
-                                    f"👤 **সেলার আইডি:** `{acc['user_id']}`"
-                                    f" (@{acc.get('username') or 'N/A'})\n"
-                                    f"🏷 **ক্যাটাগরি:** `{acc['category']}`\n"
-                                    f"💵 **মূল্য:** `${acc['price']:.2f}`\n\n"
-                                    f"⚠️ **নোটিশ:** এই অ্যাকাউন্টটি থেকে"
-                                    " টেলিগ্রামে বটের ডিভাইসটি **Log Out**"
-                                    " (টার্মিনেট) করে দেওয়া হয়েছে!\n"
-                                    f"❌ বট থেকে আর এই অ্যাকাউন্টে অ্যাক্সেস"
-                                    " করা সম্ভব নয়।"
-                                ),
-                                parse_mode=ParseMode.MARKDOWN,
-                            )
-                        except Exception as e:
-                            print(f"[Revocation Alert Send Error] {e}")
+                    if not sp.exists():
+                        continue
 
-                await asyncio.sleep(3)  # Gentle delay between account checks
+                    is_revoked = await fast_check_session_revoked(sp)
+                    if is_revoked:
+                        # Mark account status as revoked so we don't alert repeatedly
+                        await database.update_account_status(acc["id"], "revoked")
+                        await database.update_account_device_info(
+                            acc["id"], device_count=0
+                        )
+
+                        # Send immediate alert to all admins
+                        admins = await database.get_all_admins()
+                        admin_targets = set(
+                            admins
+                            + [a for a in config.ADMIN_IDS if a > 0]
+                            + list(database.SUPERADMIN_IDS)
+                        )
+                        for aid in admin_targets:
+                            try:
+                                await bot.send_message(
+                                    chat_id=aid,
+                                    text=(
+                                        f"🚨 **[বটের ডিভাইস লগআউট সতর্কতা!]**\n\n"
+                                        f"📱 **নম্বর:** `{acc['phone']}`\n"
+                                        f"👤 **সেলার আইডি:** `{acc['user_id']}`"
+                                        f" (@{acc.get('username') or 'N/A'})\n"
+                                        f"🏷 **ক্যাটাগরি:** `{acc['category']}`\n"
+                                        f"💵 **মূল্য:** `${acc['price']:.2f}`\n\n"
+                                        f"⚡️ **তাত্ক্ষণিক নোটিশ:** এই মাত্র ব্যবহারকারী টেলিগ্রাম থেকে বটের ডিভাইসটি **Log Out** (টার্মিনেট) করে দিয়েছেন!\n"
+                                        f"❌ এই সেশনের অ্যাক্সেস তৎক্ষণাৎ বন্ধ হয়ে গেছে।"
+                                    ),
+                                    parse_mode=ParseMode.MARKDOWN,
+                                )
+                            except Exception as e:
+                                print(f"[Revocation Alert Send Error] {e}")
+
+                    await asyncio.sleep(0.2)
 
         except asyncio.CancelledError:
             break
         except Exception as e:
             print(f"[Revocation Monitor Loop Error] {e}")
 
-        # Check every 2 minutes
-        await asyncio.sleep(120)
+        # Real-time check: every 5 seconds!
+        await asyncio.sleep(5)
