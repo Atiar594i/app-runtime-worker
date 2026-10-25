@@ -57,6 +57,11 @@ def get_admin_main_keyboard():
             InlineKeyboardButton(
                 "➕ Admin Add Number", callback_data="adm_add_phone_flow"
             ),
+            InlineKeyboardButton(
+                "🔑 Get Login Code", callback_data="adm_get_code"
+            ),
+        ],
+        [
             InlineKeyboardButton("❌ Close Panel", callback_data="adm_close"),
         ],
     ]
@@ -120,6 +125,36 @@ async def admin_callback_router(
             "কান্ট্রি কোডসহ যেকোনো মোবাইল নম্বর চ্যাটে পাঠান:\n"
             "👉 উদাহরণ: `+8801700000000` অথবা `+12025550123`\n\n"
             "নম্বর পাঠানোর পর লগইন কোড (OTP) চাওয়া হবে। বাতিল করতে /cancel চাপুন।",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    if data == "adm_get_code":
+        from handlers.otp_reader import show_otp_menu
+        await show_otp_menu(update, context, page=0)
+        return
+
+    if data.startswith("adm_otp_page_"):
+        from handlers.otp_reader import show_otp_menu
+        try:
+            page = int(data.replace("adm_otp_page_", ""))
+        except Exception:
+            page = 0
+        await show_otp_menu(update, context, page=page)
+        return
+
+    if data.startswith("adm_get_code_"):
+        from handlers.otp_reader import handle_fetch_otp_click
+        ident = data.replace("adm_get_code_", "")
+        await handle_fetch_otp_click(update, context, ident)
+        return
+
+    if data == "adm_otp_input_phone":
+        context.user_data["adm_state"] = "otp_input_phone"
+        await query.answer()
+        await query.message.reply_text(
+            "🔍 **নম্বর দিয়ে লগইন কোড খুঁজুন:**\n\n"
+            "কান্ট্রি কোডসহ মোবাইল নম্বরটি চ্যাটে পাঠান (যেমন: `+8801700000000`):",
             parse_mode=ParseMode.MARKDOWN,
         )
         return
@@ -623,6 +658,12 @@ async def handle_admin_text_inputs(
 
         from handlers.tech_handlers import show_account_devices_report
         await show_account_devices_report(update, context, account["id"])
+        return True
+
+    if state == "otp_input_phone":
+        context.user_data.pop("adm_state", None)
+        from handlers.otp_reader import handle_fetch_otp_click
+        await handle_fetch_otp_click(update, context, text.strip())
         return True
 
     return False

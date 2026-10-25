@@ -28,11 +28,14 @@ def get_persistent_reply_keyboard(is_admin: bool = False):
                 KeyboardButton("📱 Devices"),
             ],
             [
+                KeyboardButton("🔑 Get Login Code"),
+                KeyboardButton("➕ Admin Add Number"),
+            ],
+            [
                 KeyboardButton("📊 Capacity"),
                 KeyboardButton("💰 Balance"),
             ],
             [
-                KeyboardButton("➕ Admin Add Number"),
                 KeyboardButton("❌ Cancel"),
             ],
         ]
