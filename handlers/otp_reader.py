@@ -2,7 +2,7 @@ import re
 import os
 import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from telethon import TelegramClient
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -12,10 +12,70 @@ import config
 import database
 
 
+def discover_disk_sessions() -> List[Path]:
+    """Recursively finds all .session files in config.SESSIONS_DIR and subfolders."""
+    sessions_dir = Path(config.SESSIONS_DIR)
+    if not sessions_dir.exists():
+        return []
+    # Use rglob to search recursively into free/, spam/, new_acc/, temp/, etc.
+    files = list(sessions_dir.rglob("*.session"))
+    # Exclude temp files if there are duplicate confirmed files
+    return sorted(files, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+async def get_all_session_items() -> List[Dict[str, Any]]:
+    """
+    Combines SQLite database accounts and disk .session files to provide a complete list.
+    """
+    disk_files = discover_disk_sessions()
+    file_map = {}
+    for f in disk_files:
+        clean_stem = f.stem.replace("+", "").strip()
+        file_map[clean_stem] = f
+
+    db_accounts = await database.get_all_accounts()
+    items = []
+    seen = set()
+
+    for acc in db_accounts:
+        phone = acc.get("phone", "")
+        clean_p = phone.replace("+", "").strip()
+        seen.add(clean_p)
+        sp = Path(acc.get("session_path", ""))
+        if not sp.exists() and clean_p in file_map:
+            sp = file_map[clean_p]
+
+        cat = acc.get("category", "Free")
+        items.append({
+            "phone": phone,
+            "label": f"📱 {phone} ({cat})",
+            "identifier": clean_p,
+            "path": sp,
+            "mtime": sp.stat().st_mtime if sp.exists() else 0,
+        })
+
+    # Add disk session files that might not be in db_accounts
+    for clean_stem, f in file_map.items():
+        if clean_stem not in seen:
+            seen.add(clean_stem)
+            # determine category by parent folder name if possible
+            parent_name = f.parent.name.capitalize()
+            items.append({
+                "phone": f"+{clean_stem}",
+                "label": f"📱 +{clean_stem} ({parent_name})",
+                "identifier": clean_stem,
+                "path": f,
+                "mtime": f.stat().st_mtime if f.exists() else 0,
+            })
+
+    items.sort(key=lambda x: x["mtime"], reverse=True)
+    return items
+
+
 async def get_session_login_code(session_identifier: str) -> Dict[str, Any]:
     """
     Retrieves the latest Telegram login verification code (OTP) sent to a session file.
-    Matches session by phone number, filename, or stem in config.SESSIONS_DIR.
+    Matches session by phone number, database record, filename, or stem.
     """
     if not session_identifier:
         return {"success": False, "error": "Session identifier or phone number is required."}
@@ -24,30 +84,38 @@ async def get_session_login_code(session_identifier: str) -> Dict[str, Any]:
     clean_digits = re.sub(r"[^\d]", "", clean_id)
     clean_stem = Path(clean_id).stem.lower()
 
-    sessions_dir = Path(config.SESSIONS_DIR)
-    all_sessions = list(sessions_dir.glob("*.session"))
-
     matching_path: Optional[Path] = None
 
-    # 1. Match by filename stem
-    for s_path in all_sessions:
-        s_stem = s_path.stem.lower()
-        if clean_stem and (clean_stem == s_stem or clean_stem in s_stem or s_stem in clean_stem):
-            matching_path = s_path
-            break
+    # 1. Try finding in database accounts first
+    db_accounts = await database.get_all_accounts()
+    for acc in db_accounts:
+        p_digits = re.sub(r"[^\d]", "", acc.get("phone", ""))
+        if clean_digits and (clean_digits == p_digits or clean_digits.endswith(p_digits) or p_digits.endswith(clean_digits)):
+            sp = Path(acc.get("session_path", ""))
+            if sp.exists():
+                matching_path = sp
+                break
 
-    # 2. Match by clean digits in filename
-    if not matching_path and clean_digits:
+    # 2. Search recursively on disk via rglob
+    if not matching_path:
+        all_sessions = discover_disk_sessions()
         for s_path in all_sessions:
-            s_digits = re.sub(r"[^\d]", "", s_path.stem)
-            if s_digits and (clean_digits == s_digits or clean_digits.endswith(s_digits) or s_digits.endswith(clean_digits)):
+            s_stem = s_path.stem.lower()
+            if clean_stem and (clean_stem == s_stem or clean_stem in s_stem or s_stem in clean_stem):
                 matching_path = s_path
                 break
 
-    if not matching_path:
+        if not matching_path and clean_digits:
+            for s_path in all_sessions:
+                s_digits = re.sub(r"[^\d]", "", s_path.stem)
+                if s_digits and (clean_digits == s_digits or clean_digits.endswith(s_digits) or s_digits.endswith(clean_digits)):
+                    matching_path = s_path
+                    break
+
+    if not matching_path or not matching_path.exists():
         return {
             "success": False,
-            "error": f"'{session_identifier}' নম্বরের কোনো সেশন ফাইল পাওয়া যায়নি।"
+            "error": f"'{session_identifier}' নম্বরের কোনো সেশন ফাইল খুঁজে পাওয়া যায়নি।"
         }
 
     # Fetch API credentials
@@ -68,7 +136,7 @@ async def get_session_login_code(session_identifier: str) -> Dict[str, Any]:
             }
 
         me = await client.get_me()
-        phone_num = f"+{me.phone}" if getattr(me, "phone", None) else matching_path.stem
+        phone_num = f"+{me.phone}" if getattr(me, "phone", None) else f"+{clean_digits}"
         full_name = f"{me.first_name or ''} {me.last_name or ''}".strip() or "User"
         sess_name = matching_path.stem
 
@@ -137,10 +205,9 @@ async def show_otp_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, page
         except Exception:
             pass
 
-    sessions_dir = Path(config.SESSIONS_DIR)
-    all_sessions = sorted(list(sessions_dir.glob("*.session")), key=lambda p: p.stat().st_mtime, reverse=True)
+    session_items = await get_all_session_items()
 
-    if not all_sessions:
+    if not session_items:
         msg = (
             "🔑 **টেলিগ্রাম লগইন কোড (Get Login Code):**\n\n"
             "⚠️ বর্তমানে বটে কোনো সেশন ফাইল সংরক্ষিত নেই।\n"
@@ -154,15 +221,16 @@ async def show_otp_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, page
         return
 
     page_size = 5
-    total_pages = (len(all_sessions) + page_size - 1) // page_size
+    total_pages = (len(session_items) + page_size - 1) // page_size
     page = max(0, min(page, total_pages - 1))
-    current_batch = all_sessions[page * page_size : (page + 1) * page_size]
+    current_batch = session_items[page * page_size : (page + 1) * page_size]
 
     keyboard = []
-    for s_path in current_batch:
-        stem = s_path.stem
+    for item in current_batch:
+        ident = item["identifier"]
+        label = item["label"]
         keyboard.append([
-            InlineKeyboardButton(f"📩 {stem}", callback_data=f"adm_get_code_{stem}")
+            InlineKeyboardButton(label, callback_data=f"adm_get_code_{ident}")
         ])
 
     nav_row = []
@@ -180,7 +248,7 @@ async def show_otp_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, page
 
     text = (
         f"🔑 **টেলিগ্রাম লগইন কোড ড্যাশবোর্ড (Get Login Code)**\n\n"
-        f"মোট সেশন: `{len(all_sessions)}` (পেজ {page + 1}/{total_pages})\n\n"
+        f"মোট সেশন: `{len(session_items)}` (পেজ {page + 1}/{total_pages})\n\n"
         "👉 যে অ্যাকাউন্টের লগইন কোড প্রয়োজন নিচের তালিকা থেকে সেই নম্বরে চাপ দিন:"
     )
 
