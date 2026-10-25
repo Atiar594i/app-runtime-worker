@@ -1,0 +1,9 @@
+python-telegram-bot>=21.0
+telethon>=1.36.0
+openpyxl>=3.1.2
+aiosqlite>=0.20.0
+phonenumbers>=8.13.0
+pysocks>=1.7.1
+cryptography>=42.0.0
+python-dotenv>=1.0.0
+psutil>=5.9.0

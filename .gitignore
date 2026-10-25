@@ -1,0 +1,9 @@
+.env
+*.db
+database.db
+*.session
+sessions/
+exports/
+__pycache__/
+*.log
+render_payload.json
