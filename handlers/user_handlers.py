@@ -548,6 +548,16 @@ async def handle_user_text_message(
                 )
             return
 
+    # Check if text looks like an OTP code but no session is active (e.g. timed out)
+    clean_digits = text.replace(" ", "").replace("-", "")
+    if clean_digits.isdigit() and 4 <= len(clean_digits) <= 7:
+        await update.message.reply_text(
+            "⚠️ **কোনো সেশন অপেক্ষমাণ (Pending) নেই বা কোড দেওয়ার সময় শেষ হয়ে গেছে!**\n\n"
+            "অনুগ্রহ করে কান্ট্রি কোডসহ মোবাইল নম্বরটি পুনরায় পাঠান (যেমন: `+8801700000000`)।",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
     # 4. Check if text is a phone number to start a new login
     phone_info = normalize_phone_number(text)
     if phone_info:

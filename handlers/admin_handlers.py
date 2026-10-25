@@ -223,6 +223,10 @@ async def handle_admin_text_inputs(
     if state == "c_add_time":
         try:
             ct = int(text)
+            if ct <= 10:
+                ct = ct * 60
+            if ct < 60:
+                ct = 600
         except ValueError:
             ct = 600
         d = context.user_data["c_add_data"]

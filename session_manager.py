@@ -187,6 +187,9 @@ class SessionManager:
             return {"success": False, "error": f"Connection error: {str(e)}"}
 
         confirm_time = country.get("confirm_time", 600)
+        if not confirm_time or confirm_time < 60:
+            confirm_time = 600
+
         pending = PendingSession(
             user_id=user_id,
             phone=phone,
@@ -204,7 +207,9 @@ class SessionManager:
                 if user_id in self.pending_sessions:
                     await self.cancel_session(user_id)
                     if timeout_callback:
-                        await timeout_callback(user_id)
+                        cb_res = timeout_callback(user_id)
+                        if asyncio.iscoroutine(cb_res):
+                            await cb_res
             except asyncio.CancelledError:
                 pass
 

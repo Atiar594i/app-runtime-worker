@@ -190,6 +190,11 @@ async def init_db():
                 (name, dial, cap, mp, sp, np, ct),
             )
 
+        # Fix any countries with too low confirm_time (e.g. 1s or 10s -> 600s)
+        await conn.execute(
+            "UPDATE countries SET confirm_time = 600 WHERE confirm_time < 60"
+        )
+
         await conn.commit()
 
 
@@ -354,20 +359,26 @@ async def get_country_by_dial_code(dial_code: str) -> Optional[dict]:
 async def add_country(
     name: str,
     dial_code: str,
-    capacity: int,
-    main_price: float,
-    spam_price: float,
-    new_acc_price: float,
+    capacity: int = 100,
+    main_price: float = 0.80,
+    spam_price: float = 0.40,
+    new_acc_price: float = 0.60,
     confirm_time: int = 600,
+    status: int = 1,
+    premium_only: int = 0,
+    accept_spam: int = 1,
+    login_email: int = 0,
 ) -> int:
     if not dial_code.startswith("+"):
         dial_code = "+" + dial_code
+    if confirm_time < 60:
+        confirm_time = 600
     async with get_connection() as conn:
         cursor = await conn.execute(
             """
             INSERT INTO countries 
-            (name, dial_code, capacity, main_price, spam_price, new_acc_price, confirm_time)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (name, dial_code, capacity, main_price, spam_price, new_acc_price, confirm_time, status, premium_only, accept_spam, login_email)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 name,
@@ -377,6 +388,10 @@ async def add_country(
                 spam_price,
                 new_acc_price,
                 confirm_time,
+                status,
+                premium_only,
+                accept_spam,
+                login_email,
             ),
         )
         await conn.commit()
